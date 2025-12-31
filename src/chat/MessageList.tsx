@@ -24,14 +24,25 @@ export const MessageList: React.FC<MessageListProps> = ({
 }) => {
   const { agents } = useAgentRegistry();
 
-  if (!thread) {
+  if (!thread || thread.messages.length === 0) {
     return (
       <div className="message-list-empty">
-        <p>Start a new conversation or select an existing thread.</p>
-        <p className="hint">
-          Use <code>@agent</code> to mention a specific agent, or just type to
-          chat with the Conductor.
+        <div className="empty-state-icon">⚡</div>
+        <h4 className="empty-state-title">ARIA Assistant</h4>
+        <p className="empty-state-description">
+          Start a conversation with ARIA in {thread ? 'this thread' : 'Agent mode'}.
         </p>
+        <p className="empty-state-hint">
+          Type a message below or drag files to attach.
+        </p>
+        <div className="empty-state-tips">
+          <div className="tip">
+            <code>@agent</code> mention a specific agent
+          </div>
+          <div className="tip">
+            <code>⌘ + ↵</code> send message
+          </div>
+        </div>
       </div>
     );
   }

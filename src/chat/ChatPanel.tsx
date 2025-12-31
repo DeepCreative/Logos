@@ -36,6 +36,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ className, onClose }) => {
     addMessage,
     branchThread,
     mergeThread,
+    createThread,
   } = useThreadManager();
 
   const { agents, invokeAgent, isLoading } = useAgentRegistry();
@@ -62,7 +63,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ className, onClose }) => {
    */
   const handleSend = useCallback(
     async (content: string, mentionedAgents: AgentMention[]) => {
-      if (!activeThread) return;
+      // Create a new thread if none exists
+      let currentThread = activeThread;
+      if (!currentThread) {
+        // Use first part of message as thread name (truncated)
+        const threadName = content.slice(0, 50) + (content.length > 50 ? '...' : '');
+        currentThread = createThread(threadName);
+        setActiveThread(currentThread);
+      }
 
       // Add user message
       const userMessage: Message = {
@@ -76,7 +84,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ className, onClose }) => {
 
       // Log to audit
       await AuditLogger.getInstance().log('agent.invoke', {
-        thread_id: activeThread.id,
+        thread_id: currentThread.id,
         query_hash: await hashContent(content),
         agent_ids: mentionedAgents.map((m) => m.agentId),
         context_hash: await hashContent(JSON.stringify(context)),
@@ -94,8 +102,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ className, onClose }) => {
           const startTime = performance.now();
           const response = await invokeAgent(agentId, content, {
             context,
-            thread: activeThread,
-            previousMessages: activeThread.messages.slice(-10),
+            thread: currentThread,
+            previousMessages: currentThread.messages.slice(-10),
           });
 
           const latencyMs = performance.now() - startTime;
@@ -114,7 +122,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ className, onClose }) => {
 
           // Log agent response
           await AuditLogger.getInstance().log('agent.response', {
-            thread_id: activeThread.id,
+            thread_id: currentThread.id,
             agent_id: agentId,
             response_hash: await hashContent(response.content),
             tier_used: response.tierUsed,
@@ -132,7 +140,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ className, onClose }) => {
         }
       }
     },
-    [activeThread, addMessage, invokeAgent, context]
+    [activeThread, addMessage, invokeAgent, context, createThread, setActiveThread]
   );
 
   /**
@@ -186,7 +194,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ className, onClose }) => {
         activeThread={activeThread}
         onSelect={setActiveThread}
         onNewThread={() => {
-          // Create new thread
+          const newThread = createThread();
+          setActiveThread(newThread);
         }}
       />
 

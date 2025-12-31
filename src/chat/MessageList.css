@@ -227,3 +227,117 @@
   border-color: var(--status-warning);
   color: var(--status-warning);
 }
+
+/* =====================================================
+   EMPTY STATE
+   ===================================================== */
+
+.message-list-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: var(--space-xl);
+  text-align: center;
+}
+
+.empty-state-icon {
+  font-size: 3rem;
+  margin-bottom: var(--space-md);
+  color: var(--accent-primary, #d4a574);
+  filter: drop-shadow(0 0 8px var(--accent-primary, #d4a574));
+}
+
+.empty-state-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 var(--space-sm) 0;
+}
+
+.empty-state-description {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-xs) 0;
+}
+
+.empty-state-hint {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-lg) 0;
+}
+
+.empty-state-tips {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.empty-state-tips .tip {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+}
+
+.empty-state-tips .tip code {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+/* =====================================================
+   LOADING INDICATOR
+   ===================================================== */
+
+.message-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+}
+
+.loading-dots {
+  display: flex;
+  gap: 4px;
+}
+
+.loading-dots span {
+  width: 6px;
+  height: 6px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  animation: typing 1.4s infinite;
+}
+
+.loading-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.loading-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+.loading-text {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+@keyframes typing {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}

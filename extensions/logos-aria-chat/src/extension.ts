@@ -54,7 +54,6 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage(async (data) => {
       switch (data.type) {
         case 'ready':
-          // Webview is ready, initialize with a new chat if needed
           console.log('ARIA Chat webview ready, initializing...');
           if (this._conversations.length === 0) {
             this.newChat();
@@ -63,13 +62,22 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
           }
           break;
         case 'sendMessage':
-          await this._handleSendMessage(data.message, data.conversationId);
+          await this._handleSendMessage(data.message, data.conversationId, data.mode, data.attachments);
           break;
         case 'newChat':
           this.newChat();
           break;
         case 'selectConversation':
           this._selectConversation(data.conversationId);
+          break;
+        case 'deleteConversation':
+          this._deleteConversation(data.conversationId);
+          break;
+        case 'uploadFiles':
+          await this._handleFileUpload(data.files, data.conversationId);
+          break;
+        case 'changeMode':
+          this._handleModeChange(data.mode, data.conversationId);
           break;
       }
     });
@@ -82,6 +90,8 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       messages: [],
       createdAt: new Date().toISOString(),
       model: 'aria-01',
+      mode: 'agent',
+      attachments: [],
     };
     this._conversations.unshift(conversation);
     this._activeConversationId = conversation.id;
@@ -93,6 +103,7 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       const conv = this._conversations.find(c => c.id === this._activeConversationId);
       if (conv) {
         conv.messages = [];
+        conv.attachments = [];
         this._updateWebview();
       }
     }
@@ -103,7 +114,76 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
     this._updateWebview();
   }
 
-  private async _handleSendMessage(message: string, conversationId: string) {
+  private _deleteConversation(conversationId: string) {
+    this._conversations = this._conversations.filter(c => c.id !== conversationId);
+    if (this._activeConversationId === conversationId) {
+      this._activeConversationId = this._conversations[0]?.id || null;
+    }
+    this._updateWebview();
+  }
+
+  private _handleModeChange(mode: AriaMode, conversationId: string) {
+    const conv = this._conversations.find(c => c.id === conversationId);
+    if (conv) {
+      conv.mode = mode;
+      this._updateWebview();
+    }
+  }
+
+  private async _handleFileUpload(files: FileAttachment[], conversationId: string) {
+    const conv = this._conversations.find(c => c.id === conversationId);
+    if (!conv) return;
+
+    // Store files in Carousel
+    for (const file of files) {
+      try {
+        const carouselEndpoint = process.env.CAROUSEL_ENDPOINT || 'http://localhost:8082';
+
+        const response = await fetch(`${carouselEndpoint}/api/v1/ingest`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: file.content,
+            metadata: {
+              filename: file.name,
+              mimeType: file.type,
+              conversationId,
+              uploadedAt: new Date().toISOString(),
+            },
+          }),
+        });
+
+        if (response.ok) {
+          const result = await response.json() as { document_id?: string };
+          conv.attachments.push({
+            ...file,
+            carouselId: result.document_id,
+            status: 'uploaded',
+          });
+        } else {
+          conv.attachments.push({
+            ...file,
+            status: 'failed',
+          });
+        }
+      } catch (error) {
+        console.error('File upload error:', error);
+        conv.attachments.push({
+          ...file,
+          status: 'failed',
+        });
+      }
+    }
+
+    this._updateWebview();
+  }
+
+  private async _handleSendMessage(
+    message: string,
+    conversationId: string,
+    mode: AriaMode = 'agent',
+    attachments: FileAttachment[] = []
+  ) {
     const conversation = this._conversations.find(c => c.id === conversationId);
     if (!conversation) return;
 
@@ -113,6 +193,7 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       role: 'user',
       content: message,
       timestamp: new Date().toISOString(),
+      attachments: attachments.map(a => a.name),
     };
     conversation.messages.push(userMessage);
 
@@ -123,13 +204,12 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
 
     this._updateWebview();
 
-    // Send to ARIA backend
+    // Send to ARIA Gateway
     try {
-      // Get ARIA endpoint from environment or use default
-      // In web context, use relative URL which ALB routes to logos-chat service
-      // In desktop context, use configured endpoint
-      const ariaEndpoint = process.env.ARIA_ENDPOINT || process.env.LOGOS_CHAT_ENDPOINT;
-      const baseUrl = ariaEndpoint ? `${ariaEndpoint}/api/chat` : '/api/chat';
+      // Determine endpoint based on environment
+      const ariaGatewayEndpoint = process.env.ARIA_GATEWAY_ENDPOINT ||
+                                   process.env.ARIA_ENDPOINT ||
+                                   'http://localhost:8085';
 
       // Get editor context
       const editor = vscode.window.activeTextEditor;
@@ -139,18 +219,33 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
         selection: editor.document.getText(editor.selection),
       } : undefined;
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+      // Build request based on mode
+      const requestBody = {
+        model: 'aria-01',
+        messages: conversation.messages.map(m => ({
+          role: m.role,
+          content: m.content,
+        })),
+        stream: false,
+        // Mode-specific settings
+        mode,
+        context,
+        // Include attachment references for RAG
+        attachments: conversation.attachments
+          .filter(a => a.status === 'uploaded' && a.carouselId)
+          .map(a => a.carouselId),
+      };
 
-      const response = await fetch(`${baseUrl}/conversations/${conversationId}/messages`, {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
+
+      const response = await fetch(`${ariaGatewayEndpoint}/v1/chat/completions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: message,
-          agentId: 'aria',
-          model: 'aria-01',
-          context,
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Aria-Mode': mode,
+        },
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
 
@@ -162,9 +257,10 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
 
       const result = await response.json() as {
         id?: string;
-        content?: string;
-        response?: string;
-        tier?: number;
+        choices?: Array<{
+          message?: { content?: string };
+        }>;
+        usage?: { completion_tokens?: number };
         error?: string;
       };
 
@@ -172,27 +268,41 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
         throw new Error(result.error);
       }
 
+      // Extract response content
+      const responseContent = result.choices?.[0]?.message?.content ||
+                              'I apologize, but I encountered an issue. Please try again.';
+
       // Add assistant response
       const assistantMessage: Message = {
         id: result.id || `msg-${Date.now() + 1}`,
         role: 'assistant',
-        content: result.content || result.response || 'I apologize, but I encountered an issue. Please try again.',
+        content: responseContent,
         timestamp: new Date().toISOString(),
         agentId: 'aria',
         model: 'aria-01',
-        tier: result.tier,
+        mode,
       };
       conversation.messages.push(assistantMessage);
     } catch (error) {
       console.error('ARIA chat error:', error);
       // Fallback response for demo/offline mode
+      const modeResponses: Record<AriaMode, string> = {
+        'agent': `Hello! I'm ARIA in **Agent** mode. I can take actions on your behalf:\n\n• **Edit files** - Modify code directly\n• **Run commands** - Execute terminal commands\n• **Create files** - Generate new files and structures\n• **Git operations** - Commit, branch, merge\n\nHow can I help you today?`,
+        'ask': `Hello! I'm ARIA in **Ask** mode. I'm here to answer questions and provide information without making any changes. What would you like to know?`,
+        'plan': `Hello! I'm ARIA in **Plan** mode. I'll help you create structured plans for your tasks:\n\n• **Break down** complex tasks\n• **Create todos** with checkpoints\n• **Estimate** effort and complexity\n• **Track progress** as you work\n\nWhat would you like to plan?`,
+        'debug': `Hello! I'm ARIA in **Debug** mode. I'll help you find and fix issues:\n\n• **Analyze errors** - Parse stack traces and logs\n• **Trace code** - Follow execution paths\n• **Suggest fixes** - Provide solutions\n• **Test** - Help verify fixes\n\nWhat issue are you experiencing?`,
+        'research': `Hello! I'm ARIA in **Research** mode. I'll help you explore and understand:\n\n• **Documentation** - Find relevant docs\n• **Examples** - Locate code examples\n• **Best practices** - Industry standards\n• **Comparisons** - Evaluate options\n\nWhat would you like to research?`,
+        'code-review': `Hello! I'm ARIA in **Code Review** mode. I'll analyze your code for:\n\n• **Quality** - Style and consistency\n• **Bugs** - Potential issues\n• **Performance** - Optimization opportunities\n• **Security** - Vulnerability checks\n\nWhat code would you like me to review?`,
+      };
+
       const assistantMessage: Message = {
         id: `msg-${Date.now() + 1}`,
         role: 'assistant',
-        content: `Hello! I'm ARIA, your AI assistant powered by the Aria-01 model. I'm connected to the D3N infrastructure and can help you with:\n\n• **Code Generation** - Writing and refactoring code\n• **Architecture** - System design and documentation\n• **Research** - Finding information and best practices\n• **Analysis** - Understanding complex codebases\n\nHow can I assist you today?`,
+        content: modeResponses[mode] || modeResponses['agent'],
         timestamp: new Date().toISOString(),
         agentId: 'aria',
         model: 'aria-01',
+        mode,
       };
       conversation.messages.push(assistantMessage);
     }
@@ -210,7 +320,7 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private _getHtmlForWebview(webview: vscode.Webview): string {
+  private _getHtmlForWebview(_webview: vscode.Webview): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -218,27 +328,54 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ARIA Chat</title>
   <style>
+    /* =====================================================
+       DESIGN TOKENS - Sunset Engine
+       ===================================================== */
     :root {
       --bg-primary: #000000;
       --bg-secondary: #0a0a0a;
       --bg-tertiary: #141414;
       --bg-elevated: #1a1a1a;
-      --bg-hover: #242424;
+      --bg-hover: rgba(255, 255, 255, 0.06);
+
       --text-primary: #ffffff;
       --text-secondary: #a0a0a0;
       --text-muted: #606060;
+      --text-inverse: #000000;
+
       --border-subtle: rgba(255, 255, 255, 0.08);
       --border-medium: rgba(255, 255, 255, 0.15);
+      --border-strong: rgba(255, 255, 255, 0.25);
+
       --accent-primary: #ffffff;
+      --accent-agent: #4ade80;
+      --accent-ask: #60a5fa;
+      --accent-plan: #fbbf24;
+      --accent-debug: #ef4444;
+      --accent-research: #a78bfa;
+      --accent-review: #f472b6;
+
       --status-success: #4ade80;
+      --status-warning: #fbbf24;
+      --status-error: #ef4444;
+
       --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
       --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+
       --radius-sm: 4px;
       --radius-md: 8px;
       --radius-lg: 12px;
+      --radius-full: 9999px;
+
       --space-xs: 4px;
       --space-sm: 8px;
       --space-md: 16px;
+      --space-lg: 24px;
+
+      --transition-fast: 0.15s ease;
+      --transition-base: 0.2s ease;
+
+      --sidebar-width: 240px;
     }
 
     * {
@@ -253,22 +390,58 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       color: var(--text-primary);
       height: 100vh;
       display: flex;
-      flex-direction: column;
       font-size: 13px;
+      overflow: hidden;
     }
 
-    .header {
-      padding: var(--space-sm) var(--space-md);
-      border-bottom: 1px solid var(--border-subtle);
+    /* =====================================================
+       TWO-PANEL LAYOUT - Responsive for VS Code sidebar
+       ===================================================== */
+    .chat-container {
+      display: flex;
+      flex-direction: column; /* Stack vertically by default for narrow sidebars */
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Wide layout: side-by-side panels when width > 480px */
+    @media (min-width: 481px) {
+      .chat-container {
+        flex-direction: row;
+      }
+      .conversations-panel {
+        width: var(--sidebar-width);
+        min-width: var(--sidebar-width);
+        border-right: 1px solid var(--border-subtle);
+        border-bottom: none;
+        max-height: 100%;
+      }
+    }
+
+    /* =====================================================
+       LEFT PANEL - CONVERSATIONS LIST
+       ===================================================== */
+    .conversations-panel {
       background: var(--bg-secondary);
       display: flex;
-      align-items: center;
-      gap: var(--space-sm);
+      flex-direction: column;
+      flex-shrink: 0;
+      max-height: 180px; /* Limit height in narrow mode */
+      border-bottom: 1px solid var(--border-subtle);
+      overflow: hidden;
     }
 
-    .header-title {
+    .conversations-header {
+      padding: var(--space-sm) var(--space-md);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .conversations-title {
       font-weight: 600;
-      font-size: 12px;
+      font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--text-secondary);
@@ -278,16 +451,15 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       background: var(--bg-tertiary);
       border: 1px solid var(--border-medium);
       color: var(--text-primary);
-      padding: 6px 12px;
+      width: 28px;
+      height: 28px;
       border-radius: var(--radius-md);
       cursor: pointer;
-      font-size: 12px;
-      font-weight: 500;
+      font-size: 16px;
       display: flex;
       align-items: center;
-      gap: 6px;
-      transition: all 0.15s ease;
-      margin-left: auto;
+      justify-content: center;
+      transition: all var(--transition-fast);
     }
 
     .new-chat-btn:hover {
@@ -296,20 +468,22 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     .conversations-list {
-      flex-shrink: 0;
-      max-height: 150px;
+      flex: 1;
       overflow-y: auto;
-      border-bottom: 1px solid var(--border-subtle);
+      padding: var(--space-xs);
     }
 
     .conversation-item {
       padding: var(--space-sm) var(--space-md);
       cursor: pointer;
       display: flex;
-      align-items: center;
-      gap: var(--space-sm);
-      transition: background 0.1s ease;
+      flex-direction: column;
+      gap: 2px;
+      transition: all var(--transition-fast);
+      border-radius: var(--radius-md);
+      margin-bottom: 2px;
       border-left: 2px solid transparent;
+      position: relative;
     }
 
     .conversation-item:hover {
@@ -321,19 +495,108 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       border-left-color: var(--accent-primary);
     }
 
+    .conversation-item-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-sm);
+    }
+
     .conversation-title {
       flex: 1;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       font-size: 12px;
+      font-weight: 500;
     }
 
     .conversation-time {
       font-size: 10px;
       color: var(--text-muted);
+      flex-shrink: 0;
     }
 
+    .conversation-mode-badge {
+      font-size: 9px;
+      font-family: var(--font-mono);
+      padding: 1px 5px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-tertiary);
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
+    .conversation-delete {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      opacity: 0;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px;
+      border-radius: var(--radius-sm);
+      transition: all var(--transition-fast);
+    }
+
+    .conversation-item:hover .conversation-delete {
+      opacity: 1;
+    }
+
+    .conversation-delete:hover {
+      color: var(--status-error);
+      background: var(--bg-hover);
+    }
+
+    /* =====================================================
+       RIGHT PANEL - CHAT AREA
+       ===================================================== */
+    .chat-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0; /* Allow shrinking in flex */
+      background: var(--bg-primary);
+      position: relative; /* For drop zone positioning */
+    }
+
+    /* In narrow mode, ensure chat panel takes remaining space */
+    @media (max-width: 480px) {
+      .chat-panel {
+        flex: 1;
+        min-height: 300px;
+      }
+    }
+
+    .chat-header {
+      padding: var(--space-sm) var(--space-md);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-secondary);
+      flex-shrink: 0;
+    }
+
+    .chat-header-title {
+      font-weight: 600;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+
+    .chat-header-title .mode-icon {
+      font-size: 14px;
+    }
+
+    /* =====================================================
+       MESSAGES AREA
+       ===================================================== */
     .messages-container {
       flex: 1;
       overflow-y: auto;
@@ -373,7 +636,6 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
 
     .message.assistant .message-avatar {
       background: var(--bg-tertiary);
-      color: var(--status-success);
     }
 
     .message-content {
@@ -402,9 +664,24 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       border-radius: 3px;
     }
 
+    .message-mode-tag {
+      font-size: 9px;
+      padding: 2px 6px;
+      border-radius: var(--radius-sm);
+      text-transform: uppercase;
+      font-weight: 500;
+    }
+
+    .message-mode-tag.agent { background: rgba(74, 222, 128, 0.15); color: var(--accent-agent); }
+    .message-mode-tag.ask { background: rgba(96, 165, 250, 0.15); color: var(--accent-ask); }
+    .message-mode-tag.plan { background: rgba(251, 191, 36, 0.15); color: var(--accent-plan); }
+    .message-mode-tag.debug { background: rgba(239, 68, 68, 0.15); color: var(--accent-debug); }
+    .message-mode-tag.research { background: rgba(167, 139, 250, 0.15); color: var(--accent-research); }
+    .message-mode-tag.code-review { background: rgba(244, 114, 182, 0.15); color: var(--accent-review); }
+
     .message-text {
       font-size: 13px;
-      line-height: 1.5;
+      line-height: 1.6;
       white-space: pre-wrap;
       word-wrap: break-word;
     }
@@ -421,23 +698,189 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       font-weight: 600;
     }
 
-    .input-container {
+    .message-attachments {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-xs);
+      margin-top: var(--space-xs);
+    }
+
+    .attachment-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      font-size: 10px;
+      color: var(--text-secondary);
+    }
+
+    /* =====================================================
+       EMPTY STATE
+       ===================================================== */
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: var(--space-lg);
+      color: var(--text-muted);
+    }
+
+    .empty-state-icon {
+      font-size: 48px;
+      margin-bottom: var(--space-md);
+      opacity: 0.6;
+    }
+
+    .empty-state-title {
+      font-weight: 600;
+      font-size: 16px;
+      color: var(--text-primary);
+      margin-bottom: var(--space-xs);
+    }
+
+    .empty-state-text {
+      font-size: 12px;
+      max-width: 280px;
+      line-height: 1.5;
+    }
+
+    /* =====================================================
+       INPUT AREA - CURSOR-STYLE WITH MODE SELECTOR
+       ===================================================== */
+    .input-area {
       padding: var(--space-md);
       border-top: 1px solid var(--border-subtle);
       background: var(--bg-secondary);
+      flex-shrink: 0;
     }
 
     .input-wrapper {
       display: flex;
+      flex-direction: column;
       gap: var(--space-sm);
       padding: var(--space-sm);
       background: var(--bg-tertiary);
       border: 1px solid var(--border-medium);
-      border-radius: var(--radius-md);
+      border-radius: var(--radius-lg);
+      transition: border-color var(--transition-fast);
     }
 
     .input-wrapper:focus-within {
       border-color: var(--accent-primary);
+    }
+
+    /* MODE SELECTOR ROW - Cursor-style */
+    .input-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: 0 var(--space-xs);
+    }
+
+    .mode-selector {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      background: var(--bg-secondary);
+      border-radius: var(--radius-md);
+      padding: 2px;
+    }
+
+    .mode-option {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      font-weight: 500;
+      transition: all var(--transition-fast);
+    }
+
+    .mode-option:hover {
+      color: var(--text-primary);
+      background: var(--bg-hover);
+    }
+
+    .mode-option.active {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+
+    .mode-option.active.agent { color: var(--accent-agent); }
+    .mode-option.active.ask { color: var(--accent-ask); }
+    .mode-option.active.plan { color: var(--accent-plan); }
+    .mode-option.active.debug { color: var(--accent-debug); }
+    .mode-option.active.research { color: var(--accent-research); }
+    .mode-option.active.code-review { color: var(--accent-review); }
+
+    .mode-option .mode-icon {
+      font-size: 12px;
+    }
+
+    /* Compact mode selector for narrow viewports */
+    @media (max-width: 380px) {
+      .mode-option span:not(.mode-icon) {
+        display: none; /* Hide text labels, show only icons */
+      }
+      .mode-option {
+        padding: 6px 8px;
+      }
+    }
+
+    /* ATTACHMENTS ROW */
+    .attachments-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-xs);
+      padding: 0 var(--space-xs);
+    }
+
+    .attachment-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      font-size: 10px;
+      color: var(--text-secondary);
+    }
+
+    .attachment-badge.uploaded { border-color: var(--status-success); }
+    .attachment-badge.uploading { border-color: var(--status-warning); }
+    .attachment-badge.failed { border-color: var(--status-error); }
+
+    .attachment-remove {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 0;
+      display: flex;
+      margin-left: 2px;
+    }
+
+    .attachment-remove:hover {
+      color: var(--text-primary);
+    }
+
+    /* INPUT ROW */
+    .input-row {
+      display: flex;
+      align-items: flex-end;
+      gap: var(--space-sm);
     }
 
     #messageInput {
@@ -449,30 +892,60 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       font-size: 13px;
       resize: none;
       outline: none;
-      min-height: 20px;
-      max-height: 120px;
+      min-height: 24px;
+      max-height: 160px;
+      padding: var(--space-xs) var(--space-sm);
+      line-height: 1.5;
     }
 
     #messageInput::placeholder {
       color: var(--text-muted);
     }
 
+    .input-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--space-xs);
+      flex-shrink: 0;
+    }
+
+    .attach-btn {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      padding: 6px;
+      border-radius: var(--radius-sm);
+      transition: all var(--transition-fast);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .attach-btn:hover {
+      color: var(--text-primary);
+      background: var(--bg-hover);
+    }
+
     .send-btn {
       background: var(--accent-primary);
       border: none;
-      color: var(--bg-primary);
-      width: 28px;
-      height: 28px;
-      border-radius: var(--radius-sm);
+      color: var(--text-inverse);
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-md);
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: opacity 0.15s ease;
+      transition: all var(--transition-fast);
+      font-size: 14px;
     }
 
-    .send-btn:hover {
+    .send-btn:hover:not(:disabled) {
       opacity: 0.9;
+      transform: scale(1.02);
     }
 
     .send-btn:disabled {
@@ -480,33 +953,73 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       cursor: not-allowed;
     }
 
-    .empty-state {
-      flex: 1;
+    /* INPUT FOOTER */
+    .input-footer {
       display: flex;
-      flex-direction: column;
       align-items: center;
-      justify-content: center;
-      text-align: center;
-      padding: var(--space-md);
+      justify-content: space-between;
+      padding: 0 var(--space-xs);
+      font-size: 10px;
       color: var(--text-muted);
     }
 
-    .empty-state-icon {
-      font-size: 32px;
+    .input-footer kbd {
+      padding: 1px 4px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 3px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+    }
+
+    /* =====================================================
+       DROP ZONE
+       ===================================================== */
+    .drop-zone {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      border: 2px dashed var(--accent-primary);
+      border-radius: var(--radius-lg);
+    }
+
+    .drop-zone.active {
+      display: flex;
+    }
+
+    .drop-zone-content {
+      text-align: center;
+      color: var(--text-primary);
+    }
+
+    .drop-zone-icon {
+      font-size: 48px;
       margin-bottom: var(--space-md);
     }
 
-    .empty-state-title {
-      font-weight: 600;
-      color: var(--text-primary);
-      margin-bottom: var(--space-xs);
+    .drop-zone-text {
+      font-size: 14px;
+      font-weight: 500;
     }
 
-    .empty-state-text {
+    .drop-zone-hint {
       font-size: 12px;
-      max-width: 200px;
+      color: var(--text-secondary);
+      margin-top: var(--space-xs);
     }
 
+    /* Hidden file input */
+    #fileInput {
+      display: none;
+    }
+
+    /* =====================================================
+       SCROLLBAR
+       ===================================================== */
     ::-webkit-scrollbar {
       width: 6px;
     }
@@ -519,45 +1032,128 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       background: var(--border-medium);
       border-radius: 3px;
     }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--border-strong);
+    }
   </style>
 </head>
 <body>
-  <div class="header">
-    <span class="header-title">ARIA</span>
-    <button class="new-chat-btn" onclick="newChat()">
-      <span>+</span>
-      New Chat
-    </button>
-  </div>
+  <div class="chat-container">
+    <!-- LEFT PANEL: Conversations List -->
+    <div class="conversations-panel">
+      <div class="conversations-header">
+        <span class="conversations-title">Conversations</span>
+        <button class="new-chat-btn" onclick="newChat()" title="New Chat">+</button>
+      </div>
+      <div class="conversations-list" id="conversationsList"></div>
+    </div>
 
-  <div class="conversations-list" id="conversationsList"></div>
+    <!-- RIGHT PANEL: Chat Area -->
+    <div class="chat-panel" id="chatPanel">
+      <div class="chat-header">
+        <div class="chat-header-title">
+          <span class="mode-icon" id="headerModeIcon">⚡</span>
+          <span id="chatTitle">ARIA Assistant</span>
+        </div>
+      </div>
 
-  <div class="messages-container" id="messagesContainer">
-    <div class="empty-state">
-      <div class="empty-state-icon">⚡</div>
-      <div class="empty-state-title">ARIA Assistant</div>
-      <div class="empty-state-text">Start a new conversation with ARIA, powered by the Aria-01 model</div>
+      <!-- Messages -->
+      <div class="messages-container" id="messagesContainer">
+        <div class="empty-state">
+          <div class="empty-state-icon">⚡</div>
+          <div class="empty-state-title">ARIA Assistant</div>
+          <div class="empty-state-text">Start a new conversation with ARIA. Choose a mode below to customize how I interact with you.</div>
+        </div>
+      </div>
+
+      <!-- Input Area with Mode Selector -->
+      <div class="input-area">
+        <div class="input-wrapper" id="inputWrapper">
+          <!-- Mode Selector Row (Cursor-style) -->
+          <div class="input-header">
+            <div class="mode-selector" id="modeSelector">
+              <button class="mode-option active agent" data-mode="agent" onclick="setMode('agent')">
+                <span class="mode-icon">⚡</span>
+                <span>Agent</span>
+              </button>
+              <button class="mode-option ask" data-mode="ask" onclick="setMode('ask')">
+                <span class="mode-icon">💬</span>
+                <span>Ask</span>
+              </button>
+              <button class="mode-option plan" data-mode="plan" onclick="setMode('plan')">
+                <span class="mode-icon">📋</span>
+                <span>Plan</span>
+              </button>
+              <button class="mode-option debug" data-mode="debug" onclick="setMode('debug')">
+                <span class="mode-icon">🐛</span>
+                <span>Debug</span>
+              </button>
+              <button class="mode-option research" data-mode="research" onclick="setMode('research')">
+                <span class="mode-icon">🔬</span>
+                <span>Research</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Attachments Row -->
+          <div class="attachments-row" id="attachmentsRow"></div>
+
+          <!-- Input Row -->
+          <div class="input-row">
+            <textarea
+              id="messageInput"
+              placeholder="Message ARIA..."
+              rows="1"
+              onkeydown="handleKeyDown(event)"
+            ></textarea>
+            <div class="input-actions">
+              <button class="attach-btn" onclick="triggerFileUpload()" title="Attach files">
+                📎
+              </button>
+              <button class="send-btn" onclick="sendMessage()" id="sendBtn" title="Send message">
+                ➤
+              </button>
+            </div>
+          </div>
+
+          <!-- Input Footer -->
+          <div class="input-footer">
+            <span><kbd>@</kbd> mention • <kbd>⌘</kbd>+<kbd>↵</kbd> send</span>
+            <span>Drop files to attach</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Drop Zone -->
+      <div class="drop-zone" id="dropZone">
+        <div class="drop-zone-content">
+          <div class="drop-zone-icon">📁</div>
+          <div class="drop-zone-text">Drop files to attach</div>
+          <div class="drop-zone-hint">PDFs, images, documents, code files</div>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div class="input-container">
-    <div class="input-wrapper">
-      <textarea
-        id="messageInput"
-        placeholder="Message ARIA..."
-        rows="1"
-        onkeydown="handleKeyDown(event)"
-      ></textarea>
-      <button class="send-btn" onclick="sendMessage()" id="sendBtn">
-        ➤
-      </button>
-    </div>
-  </div>
+  <input type="file" id="fileInput" multiple accept="*/*" onchange="handleFileSelect(event)" />
 
   <script>
     const vscode = acquireVsCodeApi();
     let conversations = [];
     let activeConversationId = null;
+    let currentMode = 'agent';
+    let pendingAttachments = [];
+
+    // Mode configurations
+    const modes = {
+      'agent': { icon: '⚡', name: 'Agent', color: 'var(--accent-agent)' },
+      'ask': { icon: '💬', name: 'Ask', color: 'var(--accent-ask)' },
+      'plan': { icon: '📋', name: 'Plan', color: 'var(--accent-plan)' },
+      'debug': { icon: '🐛', name: 'Debug', color: 'var(--accent-debug)' },
+      'research': { icon: '🔬', name: 'Research', color: 'var(--accent-research)' },
+      'code-review': { icon: '👁️', name: 'Review', color: 'var(--accent-review)' },
+    };
 
     function newChat() {
       vscode.postMessage({ type: 'newChat' });
@@ -567,82 +1163,162 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ type: 'selectConversation', conversationId: id });
     }
 
+    function deleteConversation(id, event) {
+      event.stopPropagation();
+      vscode.postMessage({ type: 'deleteConversation', conversationId: id });
+    }
+
+    function setMode(mode) {
+      currentMode = mode;
+
+      // Update mode selector UI
+      document.querySelectorAll('.mode-option').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.dataset.mode === mode) {
+          btn.classList.add('active');
+        }
+      });
+
+      // Update header
+      const modeConfig = modes[mode];
+      document.getElementById('headerModeIcon').textContent = modeConfig.icon;
+
+      // Notify extension
+      if (activeConversationId) {
+        vscode.postMessage({
+          type: 'changeMode',
+          mode,
+          conversationId: activeConversationId
+        });
+      }
+    }
+
+    function triggerFileUpload() {
+      document.getElementById('fileInput').click();
+    }
+
+    function handleFileSelect(event) {
+      const files = event.target.files;
+      if (files.length > 0) {
+        processFiles(files);
+      }
+      event.target.value = ''; // Reset for same file selection
+    }
+
+    async function processFiles(fileList) {
+      const files = Array.from(fileList);
+
+      for (const file of files) {
+        const attachment = {
+          id: 'att-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          status: 'uploading',
+          content: null,
+        };
+
+        pendingAttachments.push(attachment);
+        renderAttachments();
+
+        // Read file content
+        try {
+          const content = await readFileContent(file);
+          attachment.content = content;
+          attachment.status = 'ready';
+        } catch (error) {
+          console.error('Error reading file:', error);
+          attachment.status = 'failed';
+        }
+
+        renderAttachments();
+      }
+    }
+
+    function readFileContent(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = (e) => reject(e);
+
+        // Read as text for text files, base64 for binary
+        if (file.type.startsWith('text/') ||
+            file.name.endsWith('.md') ||
+            file.name.endsWith('.json') ||
+            file.name.endsWith('.yaml') ||
+            file.name.endsWith('.yml') ||
+            file.name.endsWith('.ts') ||
+            file.name.endsWith('.js') ||
+            file.name.endsWith('.py') ||
+            file.name.endsWith('.go') ||
+            file.name.endsWith('.rs')) {
+          reader.readAsText(file);
+        } else {
+          reader.readAsDataURL(file);
+        }
+      });
+    }
+
+    function removeAttachment(id) {
+      pendingAttachments = pendingAttachments.filter(a => a.id !== id);
+      renderAttachments();
+    }
+
+    function renderAttachments() {
+      const row = document.getElementById('attachmentsRow');
+      row.innerHTML = pendingAttachments.map(att => \`
+        <div class="attachment-badge \${att.status}">
+          <span>📄</span>
+          <span>\${att.name}</span>
+          <button class="attachment-remove" onclick="removeAttachment('\${att.id}')">✕</button>
+        </div>
+      \`).join('');
+    }
+
     function sendMessage() {
       const input = document.getElementById('messageInput');
       const message = input.value.trim();
       if (!message || !activeConversationId) return;
 
+      // Get ready attachments
+      const readyAttachments = pendingAttachments.filter(a => a.status === 'ready');
+
       vscode.postMessage({
         type: 'sendMessage',
         message: message,
-        conversationId: activeConversationId
+        conversationId: activeConversationId,
+        mode: currentMode,
+        attachments: readyAttachments,
       });
+
+      // Upload files to Carousel
+      if (readyAttachments.length > 0) {
+        vscode.postMessage({
+          type: 'uploadFiles',
+          files: readyAttachments,
+          conversationId: activeConversationId,
+        });
+      }
 
       input.value = '';
       input.style.height = 'auto';
+      pendingAttachments = [];
+      renderAttachments();
     }
 
     function handleKeyDown(e) {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         sendMessage();
       }
     }
 
     function formatMessage(text) {
-      // Simple markdown-like formatting with null safety
-      if (!text || typeof text !== 'string') {
-        return text || '';
-      }
+      if (!text || typeof text !== 'string') return text || '';
       return text
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
         .replace(/\`(.*?)\`/g, '<code>$1</code>')
         .replace(/• /g, '• ');
-    }
-
-    function render() {
-      // Render conversations list
-      const listEl = document.getElementById('conversationsList');
-      listEl.innerHTML = conversations.map(conv => \`
-        <div class="conversation-item \${conv.id === activeConversationId ? 'active' : ''}"
-             onclick="selectConversation('\${conv.id}')">
-          <span class="conversation-title">\${conv.title}</span>
-          <span class="conversation-time">\${getRelativeTime(conv.createdAt)}</span>
-        </div>
-      \`).join('');
-
-      // Render messages
-      const messagesEl = document.getElementById('messagesContainer');
-      const activeConv = conversations.find(c => c.id === activeConversationId);
-
-      if (!activeConv || activeConv.messages.length === 0) {
-        messagesEl.innerHTML = \`
-          <div class="empty-state">
-            <div class="empty-state-icon">⚡</div>
-            <div class="empty-state-title">ARIA Assistant</div>
-            <div class="empty-state-text">Start a new conversation with ARIA, powered by the Aria-01 model</div>
-          </div>
-        \`;
-        return;
-      }
-
-      messagesEl.innerHTML = activeConv.messages.map(msg => \`
-        <div class="message \${msg.role}">
-          <div class="message-avatar">
-            \${msg.role === 'user' ? '👤' : '⚡'}
-          </div>
-          <div class="message-content">
-            <div class="message-header">
-              <span class="message-sender">\${msg.role === 'user' ? 'You' : 'ARIA'}</span>
-              \${msg.model ? \`<span class="message-model">\${msg.model}</span>\` : ''}
-            </div>
-            <div class="message-text">\${formatMessage(msg.content)}</div>
-          </div>
-        </div>
-      \`).join('');
-
-      // Scroll to bottom
-      messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
     function getRelativeTime(dateStr) {
@@ -658,6 +1334,105 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
       return Math.floor(diffHours / 24) + 'd';
     }
 
+    function render() {
+      // Render conversations list
+      const listEl = document.getElementById('conversationsList');
+      listEl.innerHTML = conversations.map(conv => {
+        const modeConfig = modes[conv.mode || 'agent'];
+        return \`
+          <div class="conversation-item \${conv.id === activeConversationId ? 'active' : ''}"
+               onclick="selectConversation('\${conv.id}')">
+            <div class="conversation-item-header">
+              <span class="conversation-title">\${conv.title}</span>
+              <span class="conversation-time">\${getRelativeTime(conv.createdAt)}</span>
+            </div>
+            <span class="conversation-mode-badge">\${modeConfig.icon} \${modeConfig.name}</span>
+            <button class="conversation-delete" onclick="deleteConversation('\${conv.id}', event)" title="Delete">
+              🗑️
+            </button>
+          </div>
+        \`;
+      }).join('');
+
+      // Render messages
+      const messagesEl = document.getElementById('messagesContainer');
+      const activeConv = conversations.find(c => c.id === activeConversationId);
+
+      if (!activeConv || activeConv.messages.length === 0) {
+        const modeConfig = modes[currentMode];
+        messagesEl.innerHTML = \`
+          <div class="empty-state">
+            <div class="empty-state-icon">\${modeConfig.icon}</div>
+            <div class="empty-state-title">ARIA Assistant</div>
+            <div class="empty-state-text">Start a conversation with ARIA in \${modeConfig.name} mode. Type a message below or drag files to attach.</div>
+          </div>
+        \`;
+        return;
+      }
+
+      // Update mode from active conversation
+      if (activeConv.mode && activeConv.mode !== currentMode) {
+        setMode(activeConv.mode);
+      }
+
+      messagesEl.innerHTML = activeConv.messages.map(msg => {
+        const modeConfig = modes[msg.mode || 'agent'];
+        const attachmentsHtml = msg.attachments && msg.attachments.length > 0
+          ? \`<div class="message-attachments">\${msg.attachments.map(a => \`<span class="attachment-chip">📄 \${a}</span>\`).join('')}</div>\`
+          : '';
+
+        return \`
+          <div class="message \${msg.role}">
+            <div class="message-avatar">
+              \${msg.role === 'user' ? '👤' : modeConfig.icon}
+            </div>
+            <div class="message-content">
+              <div class="message-header">
+                <span class="message-sender">\${msg.role === 'user' ? 'You' : 'ARIA'}</span>
+                \${msg.model ? \`<span class="message-model">\${msg.model}</span>\` : ''}
+                \${msg.role === 'assistant' && msg.mode ? \`<span class="message-mode-tag \${msg.mode}">\${modeConfig.name}</span>\` : ''}
+              </div>
+              <div class="message-text">\${formatMessage(msg.content)}</div>
+              \${attachmentsHtml}
+            </div>
+          </div>
+        \`;
+      }).join('');
+
+      // Scroll to bottom
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    // Drag and drop handling
+    const chatPanel = document.getElementById('chatPanel');
+    const dropZone = document.getElementById('dropZone');
+
+    chatPanel.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('active');
+    });
+
+    dropZone.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      if (e.target === dropZone) {
+        dropZone.classList.remove('active');
+      }
+    });
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('active');
+
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        processFiles(files);
+      }
+    });
+
     // Handle messages from extension
     window.addEventListener('message', event => {
       const message = event.data;
@@ -671,10 +1446,10 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
     // Auto-resize textarea
     document.getElementById('messageInput').addEventListener('input', function() {
       this.style.height = 'auto';
-      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+      this.style.height = Math.min(this.scrollHeight, 160) + 'px';
     });
 
-    // Signal to extension that webview is ready and request initial state
+    // Signal to extension that webview is ready
     console.log('ARIA Chat webview loaded, sending ready signal...');
     vscode.postMessage({ type: 'ready' });
   </script>
@@ -683,12 +1458,26 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
   }
 }
 
+type AriaMode = 'agent' | 'ask' | 'plan' | 'debug' | 'research' | 'code-review';
+
+interface FileAttachment {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  content: string | null;
+  status: 'uploading' | 'ready' | 'uploaded' | 'failed';
+  carouselId?: string;
+}
+
 interface Conversation {
   id: string;
   title: string;
   messages: Message[];
   createdAt: string;
   model: string;
+  mode: AriaMode;
+  attachments: FileAttachment[];
 }
 
 interface Message {
@@ -699,5 +1488,6 @@ interface Message {
   agentId?: string;
   model?: string;
   tier?: number;
+  mode?: AriaMode;
+  attachments?: string[];
 }
-
