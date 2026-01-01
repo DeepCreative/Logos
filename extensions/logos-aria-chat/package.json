@@ -45,6 +45,16 @@
         "command": "logos.switchMode",
         "title": "Switch ARIA Mode",
         "icon": "$(symbol-enum)"
+      },
+      {
+        "command": "logos.exportConversations",
+        "title": "Export ARIA Conversations",
+        "icon": "$(export)"
+      },
+      {
+        "command": "logos.importConversations",
+        "title": "Import ARIA Conversations",
+        "icon": "$(import)"
       }
     ],
     "keybindings": [

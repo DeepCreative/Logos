@@ -5,8 +5,8 @@ let chatPanel: AriaChatViewProvider;
 export function activate(context: vscode.ExtensionContext) {
   console.log('Logos ARIA Chat extension activated');
 
-  // Create the chat panel provider
-  chatPanel = new AriaChatViewProvider(context.extensionUri);
+  // Create the chat panel provider with context for state persistence
+  chatPanel = new AriaChatViewProvider(context.extensionUri, context);
 
   // Register the webview provider
   context.subscriptions.push(
@@ -25,6 +25,19 @@ export function activate(context: vscode.ExtensionContext) {
       chatPanel.clearChat();
     })
   );
+
+  // Register export/import commands for backup
+  context.subscriptions.push(
+    vscode.commands.registerCommand('logos.exportConversations', () => {
+      chatPanel.exportConversations();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('logos.importConversations', () => {
+      chatPanel.importConversations();
+    })
+  );
 }
 
 export function deactivate() {}
@@ -33,8 +46,88 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private _conversations: Conversation[] = [];
   private _activeConversationId: string | null = null;
+  private readonly STORAGE_KEY = 'ariaChat.conversations';
+  private readonly ACTIVE_KEY = 'ariaChat.activeConversationId';
 
-  constructor(private readonly _extensionUri: vscode.Uri) {}
+  constructor(
+    private readonly _extensionUri: vscode.Uri,
+    private readonly _context: vscode.ExtensionContext
+  ) {
+    // Load persisted conversations on initialization
+    this._loadConversations();
+  }
+
+  // Load conversations from globalState
+  private _loadConversations() {
+    try {
+      const storedConversations = this._context.globalState.get<Conversation[]>(this.STORAGE_KEY);
+      const storedActiveId = this._context.globalState.get<string>(this.ACTIVE_KEY);
+
+      if (storedConversations && storedConversations.length > 0) {
+        this._conversations = storedConversations;
+        this._activeConversationId = storedActiveId || storedConversations[0].id;
+        console.log(`Loaded ${storedConversations.length} conversations from storage`);
+      }
+    } catch (error) {
+      console.error('Failed to load conversations:', error);
+    }
+  }
+
+  // Save conversations to globalState
+  private async _saveConversations() {
+    try {
+      await this._context.globalState.update(this.STORAGE_KEY, this._conversations);
+      await this._context.globalState.update(this.ACTIVE_KEY, this._activeConversationId);
+    } catch (error) {
+      console.error('Failed to save conversations:', error);
+    }
+  }
+
+  // Export conversations to file
+  public async exportConversations() {
+    if (this._conversations.length === 0) {
+      vscode.window.showWarningMessage('No conversations to export.');
+      return;
+    }
+
+    const uri = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file('aria-conversations.json'),
+      filters: { 'JSON': ['json'] }
+    });
+
+    if (uri) {
+      const content = JSON.stringify(this._conversations, null, 2);
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
+      vscode.window.showInformationMessage(`Exported ${this._conversations.length} conversations.`);
+    }
+  }
+
+  // Import conversations from file
+  public async importConversations() {
+    const uris = await vscode.window.showOpenDialog({
+      canSelectMany: false,
+      filters: { 'JSON': ['json'] }
+    });
+
+    if (uris && uris.length > 0) {
+      try {
+        const content = await vscode.workspace.fs.readFile(uris[0]);
+        const imported = JSON.parse(content.toString()) as Conversation[];
+
+        if (Array.isArray(imported)) {
+          // Merge with existing, avoid duplicates by ID
+          const existingIds = new Set(this._conversations.map(c => c.id));
+          const newConversations = imported.filter(c => !existingIds.has(c.id));
+          this._conversations = [...newConversations, ...this._conversations];
+          await this._saveConversations();
+          this._updateWebview();
+          vscode.window.showInformationMessage(`Imported ${newConversations.length} new conversations.`);
+        }
+      } catch (error) {
+        vscode.window.showErrorMessage('Failed to import conversations: Invalid file format.');
+      }
+    }
+  }
 
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -134,37 +227,89 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
     const conv = this._conversations.find(c => c.id === conversationId);
     if (!conv) return;
 
+    // Carousel endpoint - use internal cluster URL in production
+    const carouselEndpoint = process.env.CAROUSEL_ENDPOINT ||
+                             process.env.CAROUSEL_URL ||
+                             'http://carousel.carousel.svc.cluster.local';
+    const collection = 'logos-attachments'; // Default collection for Logos file attachments
+
     // Store files in Carousel
     for (const file of files) {
       try {
-        const carouselEndpoint = process.env.CAROUSEL_ENDPOINT || 'http://localhost:8082';
+        // Determine if content is text or binary (base64)
+        const isTextContent = typeof file.content === 'string' &&
+                              !file.content.startsWith('data:');
 
-        const response = await fetch(`${carouselEndpoint}/api/v1/ingest`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            content: file.content,
-            metadata: {
-              filename: file.name,
-              mimeType: file.type,
-              conversationId,
-              uploadedAt: new Date().toISOString(),
-            },
-          }),
-        });
-
-        if (response.ok) {
-          const result = await response.json() as { document_id?: string };
-          conv.attachments.push({
-            ...file,
-            carouselId: result.document_id,
-            status: 'uploaded',
+        if (isTextContent) {
+          // Use text ingestion endpoint for text files
+          const response = await fetch(`${carouselEndpoint}/v1/collections/${collection}/ingest/text`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: file.content,
+              source: file.name,
+              metadata: {
+                filename: file.name,
+                mimeType: file.type || 'text/plain',
+                conversationId,
+                uploadedAt: new Date().toISOString(),
+                size: file.size,
+              },
+              chunking_strategy: 'semantic',
+            }),
           });
+
+          if (response.ok) {
+            const result = await response.json() as { document_id?: string; job_id?: string };
+            conv.attachments.push({
+              ...file,
+              carouselId: result.document_id || result.job_id,
+              status: 'uploaded',
+            });
+          } else {
+            const errorText = await response.text();
+            console.error('Carousel upload failed:', response.status, errorText);
+            conv.attachments.push({
+              ...file,
+              status: 'failed',
+            });
+          }
         } else {
-          conv.attachments.push({
-            ...file,
-            status: 'failed',
+          // For binary files (base64 encoded), create a FormData and use file endpoint
+          // Note: In VS Code extension context, we pass the base64 content directly
+          const response = await fetch(`${carouselEndpoint}/v1/collections/${collection}/ingest/text`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: `[Binary file: ${file.name}]\nSize: ${file.size} bytes\nType: ${file.type}\n\nBase64 content stored for reference.`,
+              source: file.name,
+              metadata: {
+                filename: file.name,
+                mimeType: file.type,
+                conversationId,
+                uploadedAt: new Date().toISOString(),
+                size: file.size,
+                encoding: 'base64',
+                originalContent: file.content, // Store original base64 in metadata
+              },
+              chunking_strategy: 'recursive',
+            }),
           });
+
+          if (response.ok) {
+            const result = await response.json() as { document_id?: string; job_id?: string };
+            conv.attachments.push({
+              ...file,
+              carouselId: result.document_id || result.job_id,
+              status: 'uploaded',
+            });
+          } else {
+            console.error('Carousel upload failed:', response.status);
+            conv.attachments.push({
+              ...file,
+              status: 'failed',
+            });
+          }
         }
       } catch (error) {
         console.error('File upload error:', error);
@@ -204,12 +349,19 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
 
     this._updateWebview();
 
-    // Send to ARIA Gateway
+    // Send to ARIA Gateway or Athena for Research mode
     try {
       // Determine endpoint based on environment
+      // In production: use internal cluster service
+      // In development: use external gateway or localhost
       const ariaGatewayEndpoint = process.env.ARIA_GATEWAY_ENDPOINT ||
                                    process.env.ARIA_ENDPOINT ||
-                                   'http://localhost:8085';
+                                   'http://aria-gateway.aria.svc.cluster.local';
+
+      // Athena endpoint for Research mode
+      const athenaEndpoint = process.env.ATHENA_ENDPOINT ||
+                              process.env.ATHENA_URL ||
+                              'http://athena-research-agent.aria.svc.cluster.local:8082';
 
       // Get editor context
       const editor = vscode.window.activeTextEditor;
@@ -219,35 +371,66 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
         selection: editor.document.getText(editor.selection),
       } : undefined;
 
-      // Build request based on mode
-      const requestBody = {
-        model: 'aria-01',
-        messages: conversation.messages.map(m => ({
-          role: m.role,
-          content: m.content,
-        })),
-        stream: false,
-        // Mode-specific settings
-        mode,
-        context,
-        // Include attachment references for RAG
-        attachments: conversation.attachments
-          .filter(a => a.status === 'uploaded' && a.carouselId)
-          .map(a => a.carouselId),
-      };
-
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
+      const timeoutId = setTimeout(() => controller.abort(), 180000); // 180s timeout for research
 
-      const response = await fetch(`${ariaGatewayEndpoint}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Aria-Mode': mode,
-        },
-        body: JSON.stringify(requestBody),
-        signal: controller.signal,
-      });
+      let response: Response;
+
+      // Route to Athena for Research mode
+      if (mode === 'research') {
+        // Create research session with Athena
+        const researchRequest = {
+          query: message,
+          context: context?.selection || '',
+          depth: 'comprehensive',
+          source_types: ['web', 'internal', 'academic'],
+          max_threads: 5,
+          metadata: {
+            conversationId: conversation.id,
+            attachments: conversation.attachments
+              .filter(a => a.status === 'uploaded' && a.carouselId)
+              .map(a => a.carouselId),
+          },
+        };
+
+        response = await fetch(`${athenaEndpoint}/v1/research/sessions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify(researchRequest),
+          signal: controller.signal,
+        });
+      } else {
+        // Standard ARIA Gateway for other modes
+        const requestBody = {
+          model: 'aria-01',
+          messages: conversation.messages.map(m => ({
+            role: m.role,
+            content: m.content,
+          })),
+          stream: true, // Enable SSE streaming
+          // Mode-specific settings
+          mode,
+          context,
+          // Include attachment references for RAG
+          attachments: conversation.attachments
+            .filter(a => a.status === 'uploaded' && a.carouselId)
+            .map(a => a.carouselId),
+        };
+
+        response = await fetch(`${ariaGatewayEndpoint}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
+            'X-Aria-Mode': mode,
+          },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal,
+        });
+      }
 
       clearTimeout(timeoutId);
 
@@ -255,34 +438,159 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
         throw new Error(`API returned ${response.status}: ${response.statusText}`);
       }
 
-      const result = await response.json() as {
-        id?: string;
-        choices?: Array<{
-          message?: { content?: string };
-        }>;
-        usage?: { completion_tokens?: number };
-        error?: string;
-      };
-
-      if (result.error) {
-        throw new Error(result.error);
-      }
-
-      // Extract response content
-      const responseContent = result.choices?.[0]?.message?.content ||
-                              'I apologize, but I encountered an issue. Please try again.';
-
-      // Add assistant response
+      // Create placeholder message for streaming
       const assistantMessage: Message = {
-        id: result.id || `msg-${Date.now() + 1}`,
+        id: `msg-${Date.now() + 1}`,
         role: 'assistant',
-        content: responseContent,
+        content: '',
         timestamp: new Date().toISOString(),
         agentId: 'aria',
         model: 'aria-01',
         mode,
       };
       conversation.messages.push(assistantMessage);
+      this._updateWebview();
+
+      // Handle streaming response
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('text/event-stream') && response.body) {
+        // SSE streaming response
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const data = line.slice(6).trim();
+                if (data === '[DONE]') {
+                  break;
+                }
+                try {
+                  const chunk = JSON.parse(data) as {
+                    id?: string;
+                    choices?: Array<{
+                      delta?: { content?: string };
+                      finish_reason?: string;
+                    }>;
+                  };
+
+                  // Update message ID from stream
+                  if (chunk.id) {
+                    assistantMessage.id = chunk.id;
+                  }
+
+                  // Append delta content
+                  const deltaContent = chunk.choices?.[0]?.delta?.content;
+                  if (deltaContent) {
+                    assistantMessage.content += deltaContent;
+                    // Update webview with streaming content
+                    this._view?.webview.postMessage({
+                      type: 'streamUpdate',
+                      messageId: assistantMessage.id,
+                      content: assistantMessage.content,
+                    });
+                  }
+
+                  // Check for completion
+                  if (chunk.choices?.[0]?.finish_reason) {
+                    break;
+                  }
+                } catch (parseError) {
+                  // Skip malformed JSON chunks
+                  console.warn('Failed to parse SSE chunk:', data);
+                }
+              }
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      } else if (mode === 'research') {
+        // Handle Athena Research mode response
+        const researchResult = await response.json() as {
+          id?: string;
+          session_id?: string;
+          query?: string;
+          status?: string;
+          threads?: Array<{
+            id: string;
+            type: string;
+            query: string;
+            sources?: Array<{ title: string; url?: string }>;
+            findings?: string;
+          }>;
+          narrative?: { content: string; sources?: Array<{ title: string; url?: string }> };
+          error?: string;
+        };
+
+        if (researchResult.error) {
+          throw new Error(researchResult.error);
+        }
+
+        // Format research response with structured output
+        let researchContent = '';
+        if (researchResult.narrative?.content) {
+          researchContent = researchResult.narrative.content;
+          if (researchResult.narrative.sources && researchResult.narrative.sources.length > 0) {
+            researchContent += '\n\n**Sources:**\n';
+            researchResult.narrative.sources.forEach((src, i) => {
+              researchContent += `${i + 1}. [${src.title}](${src.url || '#'})\n`;
+            });
+          }
+        } else if (researchResult.threads && researchResult.threads.length > 0) {
+          // Show thread findings
+          researchContent = `**Research Session Started**\nSession ID: \`${researchResult.session_id || researchResult.id}\`\n\n`;
+          researchResult.threads.forEach((thread, i) => {
+            researchContent += `**Thread ${i + 1}: ${thread.type}**\n`;
+            researchContent += `Query: ${thread.query}\n`;
+            if (thread.findings) {
+              researchContent += `Findings: ${thread.findings}\n`;
+            }
+            researchContent += '\n';
+          });
+        } else {
+          researchContent = `Research session created. Session ID: \`${researchResult.session_id || researchResult.id}\`\n\nProcessing your research query...`;
+        }
+
+        assistantMessage.content = researchContent;
+        assistantMessage.id = researchResult.id || researchResult.session_id || assistantMessage.id;
+        assistantMessage.agentId = 'athena';
+        assistantMessage.model = 'athena-research';
+      } else {
+        // Fallback: Non-streaming JSON response
+        const result = await response.json() as {
+          id?: string;
+          choices?: Array<{
+            message?: { content?: string };
+          }>;
+          usage?: { completion_tokens?: number };
+          error?: string;
+        };
+
+        if (result.error) {
+          throw new Error(result.error);
+        }
+
+        assistantMessage.content = result.choices?.[0]?.message?.content ||
+                                   'I apologize, but I encountered an issue. Please try again.';
+        if (result.id) {
+          assistantMessage.id = result.id;
+        }
+      }
+
+      // Final update with complete message
+      if (!assistantMessage.content) {
+        assistantMessage.content = 'I apologize, but I encountered an issue. Please try again.';
+      }
     } catch (error) {
       console.error('ARIA chat error:', error);
       // Fallback response for demo/offline mode
@@ -318,6 +626,8 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
         activeConversationId: this._activeConversationId,
       });
     }
+    // Persist conversations after each update
+    this._saveConversations();
   }
 
   private _getHtmlForWebview(_webview: vscode.Webview): string {
@@ -1321,6 +1631,21 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
         .replace(/• /g, '• ');
     }
 
+    // Enhanced message formatter with markdown support
+    function formatMessageContent(text) {
+      if (!text || typeof text !== 'string') return text || '';
+      // Handle newlines, bold, code, lists
+      return text
+        .replace(/</g, '&lt;').replace(/>/g, '&gt;')  // Escape HTML
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\`\`\`([\\s\\S]*?)\`\`\`/g, '<pre><code>$1</code></pre>')
+        .replace(/\`(.*?)\`/g, '<code>$1</code>')
+        .replace(/^• /gm, '<span class="bullet">•</span> ')
+        .replace(/^- /gm, '<span class="bullet">•</span> ')
+        .replace(/^\\* /gm, '<span class="bullet">•</span> ')
+        .replace(/\\n/g, '<br>');
+    }
+
     function getRelativeTime(dateStr) {
       const date = new Date(dateStr);
       const now = new Date();
@@ -1382,17 +1707,17 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
           : '';
 
         return \`
-          <div class="message \${msg.role}">
+          <div class="message \${msg.role}" data-message-id="\${msg.id}">
             <div class="message-avatar">
               \${msg.role === 'user' ? '👤' : modeConfig.icon}
             </div>
-            <div class="message-content">
+            <div class="message-bubble">
               <div class="message-header">
                 <span class="message-sender">\${msg.role === 'user' ? 'You' : 'ARIA'}</span>
                 \${msg.model ? \`<span class="message-model">\${msg.model}</span>\` : ''}
                 \${msg.role === 'assistant' && msg.mode ? \`<span class="message-mode-tag \${msg.mode}">\${modeConfig.name}</span>\` : ''}
               </div>
-              <div class="message-text">\${formatMessage(msg.content)}</div>
+              <div class="message-content">\${formatMessageContent(msg.content)}</div>
               \${attachmentsHtml}
             </div>
           </div>
@@ -1440,6 +1765,28 @@ class AriaChatViewProvider implements vscode.WebviewViewProvider {
         conversations = message.conversations;
         activeConversationId = message.activeConversationId;
         render();
+      } else if (message.type === 'streamUpdate') {
+        // Handle streaming token updates
+        const conv = conversations.find(c => c.id === activeConversationId);
+        if (conv) {
+          const msg = conv.messages.find(m => m.id === message.messageId);
+          if (msg) {
+            msg.content = message.content;
+            // Update just the message content in-place for smooth streaming
+            const messageEl = document.querySelector(\`[data-message-id="\${message.messageId}"] .message-content\`);
+            if (messageEl) {
+              messageEl.innerHTML = formatMessageContent(message.content);
+              // Scroll to bottom
+              const messagesArea = document.getElementById('messagesArea');
+              if (messagesArea) {
+                messagesArea.scrollTop = messagesArea.scrollHeight;
+              }
+            } else {
+              // Full re-render if element not found
+              render();
+            }
+          }
+        }
       }
     });
 

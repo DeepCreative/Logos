@@ -10,12 +10,13 @@ metadata:
     app.kubernetes.io/part-of: logos
 data:
   # Service URLs
-  persona_url: "http://persona.persona.svc.cluster.local"
-  aria_url: "http://aria.aria.svc.cluster.local"
-  d3n_url: "http://d3n.d3n.svc.cluster.local"
-  athena_url: "http://athena.athena.svc.cluster.local"
+  persona_url: "http://persona-api.persona-staging.svc.cluster.local"
+  aria_url: "http://aria-gateway.aria.svc.cluster.local"
+  aria_gateway_url: "http://aria-gateway.aria.svc.cluster.local"
+  d3n_url: "http://d3n-gateway.bravozero.svc.cluster.local:9090"
+  athena_url: "http://athena-research-agent.aria.svc.cluster.local:8082"
   carousel_url: "http://carousel.carousel.svc.cluster.local"
-  beeper_url: "http://beeper.beeper.svc.cluster.local"
+  beeper_url: "http://beeper.bravozero.svc.cluster.local:8000"
 
   # Storage buckets
   audit_bucket: "logos-audit-logs"
