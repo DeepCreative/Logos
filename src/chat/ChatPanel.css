@@ -39,6 +39,17 @@
   flex-shrink: 0;
 }
 
+.aria-logo {
+  font-size: 1.25rem;
+  color: #d4a574;
+}
+
+.aria-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 .chat-title {
   flex: 1;
   margin: 0;
@@ -100,6 +111,321 @@
   border-left: 1px solid var(--border-subtle);
   background: var(--bg-secondary);
   overflow-y: auto;
+}
+
+/* =====================================================
+   MESSAGE LIST
+   ===================================================== */
+
+.message-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.message-list-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  color: var(--text-secondary);
+  padding: var(--space-2xl);
+}
+
+.empty-state-icon {
+  font-size: 3rem;
+  margin-bottom: var(--space-md);
+  color: #d4a574;
+}
+
+.empty-state-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: var(--space-sm);
+  color: var(--text-primary);
+}
+
+.empty-state-description {
+  color: var(--text-secondary);
+  margin-bottom: var(--space-md);
+}
+
+.empty-state-hint {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+/* =====================================================
+   MESSAGE ITEM
+   ===================================================== */
+
+.message-item {
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+}
+
+.message-item--user {
+  background: var(--bg-tertiary);
+}
+
+.message-item--error {
+  border-color: var(--status-error);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.message-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-sm);
+}
+
+.message-sender {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.user-avatar,
+.assistant-avatar,
+.system-avatar {
+  font-size: 1rem;
+}
+
+.assistant-avatar {
+  color: #d4a574;
+}
+
+.sender-name {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.message-time {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.message-content {
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.message-content pre {
+  background: var(--bg-primary);
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  margin: var(--space-sm) 0;
+}
+
+.message-content code {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+}
+
+.message-content p {
+  margin-bottom: var(--space-sm);
+}
+
+.message-content p:last-child {
+  margin-bottom: 0;
+}
+
+.message-actions {
+  display: flex;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.message-item:hover .message-actions {
+  opacity: 1;
+}
+
+.action-button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  transition: all var(--transition-fast);
+}
+
+.action-button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* =====================================================
+   LOADING INDICATOR
+   ===================================================== */
+
+.message-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  color: var(--text-secondary);
+}
+
+.loading-dots {
+  display: flex;
+  gap: 4px;
+}
+
+.loading-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  animation: typing 1.4s infinite ease-in-out;
+}
+
+.loading-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.loading-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+.loading-text {
+  font-size: 0.875rem;
+}
+
+/* =====================================================
+   CHAT INPUT AREA
+   ===================================================== */
+
+.chat-input-container {
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  padding: var(--space-md);
+}
+
+.mode-tabs {
+  margin-bottom: var(--space-sm);
+}
+
+.input-wrapper {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-sm);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-lg);
+  padding: var(--space-sm);
+  transition: border-color var(--transition-fast);
+}
+
+.input-wrapper:focus-within {
+  border-color: var(--accent-primary);
+}
+
+.input-wrapper textarea {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  min-height: 24px;
+  max-height: 150px;
+  padding: var(--space-xs);
+}
+
+.input-wrapper textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.input-actions {
+  display: flex;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+.attach-button,
+.send-button,
+.stop-button {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  transition: all var(--transition-fast);
+}
+
+.attach-button {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.attach-button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.send-button {
+  background: var(--accent-primary);
+  color: var(--text-inverse);
+}
+
+.send-button:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.send-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.stop-button {
+  background: var(--status-error);
+  color: white;
+}
+
+.stop-button:hover {
+  opacity: 0.9;
+}
+
+.input-hints {
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--space-sm);
+  padding: 0 var(--space-xs);
+}
+
+.hint,
+.hint-right {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.hint kbd {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
 }
 
 /* =====================================================

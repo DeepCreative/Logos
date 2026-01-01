@@ -93,6 +93,25 @@ export class ThreadManager {
   }
 
   /**
+   * Update a message in the active thread
+   */
+  updateMessage(messageId: string, updates: Partial<Message>): void {
+    const thread = this.getActive();
+    if (!thread) {
+      throw new Error('No active thread');
+    }
+
+    const messageIndex = thread.messages.findIndex(m => m.id === messageId);
+    if (messageIndex !== -1) {
+      thread.messages[messageIndex] = {
+        ...thread.messages[messageIndex],
+        ...updates,
+      };
+      thread.updatedAt = new Date().toISOString();
+    }
+  }
+
+  /**
    * Branch a thread from a specific message
    */
   branch(messageIndex: number): Thread {

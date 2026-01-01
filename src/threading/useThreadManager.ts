@@ -11,6 +11,7 @@ export interface UseThreadManagerResult {
   activeThread: Thread | null;
   setActiveThread: (thread: Thread) => void;
   addMessage: (message: Message) => void;
+  updateMessage: (messageId: string, updates: Partial<Message>) => void;
   branchThread: (messageIndex: number) => Thread;
   mergeThread: (request: MergeRequest) => void;
   createThread: (name?: string) => Thread;
@@ -49,6 +50,15 @@ export function useThreadManager(workspaceId?: string): UseThreadManagerResult {
   const addMessage = useCallback(
     (message: Message) => {
       manager.addMessage(message);
+      refreshState();
+      manager.persist();
+    },
+    [manager, refreshState]
+  );
+
+  const updateMessage = useCallback(
+    (messageId: string, updates: Partial<Message>) => {
+      manager.updateMessage(messageId, updates);
       refreshState();
       manager.persist();
     },
@@ -98,6 +108,7 @@ export function useThreadManager(workspaceId?: string): UseThreadManagerResult {
     activeThread,
     setActiveThread,
     addMessage,
+    updateMessage,
     branchThread,
     mergeThread,
     createThread,
