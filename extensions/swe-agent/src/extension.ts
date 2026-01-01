@@ -12,9 +12,9 @@
 import * as vscode from 'vscode';
 import { SWEAgentClient } from './sweAgent';
 import { ToolRegistry } from './tools';
-import { ChatViewProvider } from './chatView';
-import { HistoryViewProvider } from './historyView';
-import { ModelsViewProvider } from './modelsView';
+import { SWEChatViewProvider } from './chatView';
+import { SWEHistoryProvider } from './historyView';
+import { SWEModelsProvider } from './modelsView';
 
 let client: SWEAgentClient;
 let toolRegistry: ToolRegistry;
@@ -221,19 +221,19 @@ function registerCommands(context: vscode.ExtensionContext) {
  */
 function registerViews(context: vscode.ExtensionContext) {
     // Chat view
-    const chatProvider = new ChatViewProvider(context.extensionUri, client);
+    const chatProvider = new SWEChatViewProvider(context.extensionUri, client);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('swe-agent.chat', chatProvider)
     );
 
     // History view
-    const historyProvider = new HistoryViewProvider();
+    const historyProvider = new SWEHistoryProvider();
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('swe-agent.history', historyProvider)
     );
 
     // Models view
-    const modelsProvider = new ModelsViewProvider(client);
+    const modelsProvider = new SWEModelsProvider(client);
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('swe-agent.models', modelsProvider)
     );
@@ -502,6 +502,7 @@ function formatExplanation(explanation: string): string {
         .replace(/\n/g, '<br>')
         .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
 }
+
 
 
 

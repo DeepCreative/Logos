@@ -639,3 +639,4 @@ export function registerResearchTools(registry: AriaToolRegistry): void {
   registry.registerTool(createCitationDefinition, new CreateCitationTool());
 }
 
+

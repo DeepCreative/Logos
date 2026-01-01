@@ -219,3 +219,4 @@ export class AutoModeDetector {
 export const autoModeDetector = AutoModeDetector.getInstance();
 export default AutoModeDetector;
 
+

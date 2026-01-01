@@ -312,3 +312,4 @@ When `logos.autoModeSwitch` is enabled, Aria can automatically switch modes base
 5. **Code Review** before merging - Catch issues early
 6. **Agent mode** for execution - Get things done
 
+

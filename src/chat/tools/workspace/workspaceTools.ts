@@ -444,3 +444,4 @@ export function registerWorkspaceTools(registry: AriaToolRegistry): void {
   registry.registerTool(getProjectSummaryDefinition, new GetProjectSummaryTool());
 }
 
+

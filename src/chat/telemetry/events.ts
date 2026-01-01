@@ -397,3 +397,4 @@ export function sanitizeEvent(event: TelemetryEvent): TelemetryEvent {
   return sanitized;
 }
 
+
