@@ -1,0 +1,196 @@
+{
+  "name": "logos-forge",
+  "displayName": "Logos Forge Integration",
+  "description": "Deep integration between Logos IDE and Forge Git platform",
+  "version": "1.0.0",
+  "publisher": "bravozero",
+  "icon": "resources/forge-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://forge.bravozero.ai/bravozero/logos-forge"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "keywords": [
+    "forge",
+    "git",
+    "code review",
+    "pull request",
+    "aria"
+  ],
+  "activationEvents": [
+    "workspaceContains:.git"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "logos-forge.openInForge",
+        "title": "Open in Forge",
+        "icon": "$(link-external)",
+        "category": "Forge"
+      },
+      {
+        "command": "logos-forge.createPR",
+        "title": "Create Pull Request",
+        "icon": "$(git-pull-request)",
+        "category": "Forge"
+      },
+      {
+        "command": "logos-forge.viewPR",
+        "title": "View Pull Request",
+        "icon": "$(eye)",
+        "category": "Forge"
+      },
+      {
+        "command": "logos-forge.requestReview",
+        "title": "Request ARIA Code Review",
+        "icon": "$(robot)",
+        "category": "Forge"
+      },
+      {
+        "command": "logos-forge.triggerAction",
+        "title": "Trigger Forge Action",
+        "icon": "$(play)",
+        "category": "Forge"
+      },
+      {
+        "command": "logos-forge.viewCIStatus",
+        "title": "View CI/CD Status",
+        "icon": "$(beaker)",
+        "category": "Forge"
+      },
+      {
+        "command": "logos-forge.syncWorkspace",
+        "title": "Sync with Forge",
+        "icon": "$(sync)",
+        "category": "Forge"
+      },
+      {
+        "command": "logos-forge.agentFix",
+        "title": "Request Agent Fix",
+        "icon": "$(wand)",
+        "category": "Forge"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "logos-forge.openInForge",
+          "when": "resourceScheme == file",
+          "group": "navigation"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "logos-forge.createPR",
+          "group": "navigation"
+        },
+        {
+          "command": "logos-forge.syncWorkspace",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "logos-forge.requestReview",
+          "group": "forge@1"
+        },
+        {
+          "command": "logos-forge.agentFix",
+          "group": "forge@2"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "forge",
+          "title": "Forge",
+          "icon": "resources/forge-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "forge": [
+        {
+          "id": "forge.pullRequests",
+          "name": "Pull Requests"
+        },
+        {
+          "id": "forge.ci",
+          "name": "CI/CD Status"
+        },
+        {
+          "id": "forge.reviews",
+          "name": "Code Reviews"
+        },
+        {
+          "id": "forge.agents",
+          "name": "Agent Actions"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Logos Forge",
+      "properties": {
+        "logos-forge.serverUrl": {
+          "type": "string",
+          "default": "https://forge.bravozero.ai",
+          "description": "Forge server URL"
+        },
+        "logos-forge.bridgeUrl": {
+          "type": "string",
+          "default": "https://forge.bravozero.ai/api/v1/logos",
+          "description": "Logos Bridge service URL"
+        },
+        "logos-forge.autoSync": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically sync workspace state with Forge"
+        },
+        "logos-forge.showCIInGutter": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show CI status in editor gutter"
+        },
+        "logos-forge.enableAgentSuggestions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable ARIA agent suggestions"
+        },
+        "logos-forge.notifyOnPRUpdates": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notifications for PR updates"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "@vscode/test-cli": "^0.0.4",
+    "@vscode/test-electron": "^2.3.8",
+    "eslint": "^8.50.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "ws": "^8.14.0"
+  }
+}
+

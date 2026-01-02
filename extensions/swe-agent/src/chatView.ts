@@ -295,3 +295,4 @@ export class SWEChatViewProvider implements vscode.WebviewViewProvider {
 
 
 
+

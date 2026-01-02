@@ -313,3 +313,4 @@ When `logos.autoModeSwitch` is enabled, Aria can automatically switch modes base
 6. **Agent mode** for execution - Get things done
 
 
+
