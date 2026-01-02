@@ -197,8 +197,8 @@ class ForgeStatusBar {
     }
 
     update(): void {
-        const icon = this.ciStatus === 'success' ? '$(check)' : 
-                     this.ciStatus === 'failure' ? '$(x)' : 
+        const icon = this.ciStatus === 'success' ? '$(check)' :
+                     this.ciStatus === 'failure' ? '$(x)' :
                      this.ciStatus === 'pending' ? '$(clock)' : '$(dash)';
         this.statusBarItem.text = `${icon} Forge`;
         this.statusBarItem.tooltip = `Forge CI Status: ${this.ciStatus}`;
@@ -500,7 +500,7 @@ async function viewCIStatus(): Promise<void> {
 
     try {
         const status = await forgeClient.getCIStatus(repoInfo.owner, repoInfo.repo, sha);
-        
+
         const items = status.statuses.map((s: any) => ({
             label: `${s.state === 'success' ? '✓' : s.state === 'failure' ? '✗' : '○'} ${s.context}`,
             description: s.description,
