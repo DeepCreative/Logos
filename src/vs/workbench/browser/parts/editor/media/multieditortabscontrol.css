@@ -105,6 +105,7 @@
 	box-sizing: border-box;
 	padding-left: 10px;
 	outline-offset: -2px;
+	transition: background-color 0.1s ease, color 0.1s ease;
 }
 
 /* Tab Background Color in/active group/tab */

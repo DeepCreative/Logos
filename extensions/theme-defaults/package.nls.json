@@ -1,6 +1,7 @@
 {
-	"displayName": "Default Themes",
-	"description": "The default Visual Studio light and dark themes",
+	"displayName": "Logos Themes",
+	"description": "The default Logos light and dark themes",
+	"logosDarkThemeLabel": "Logos Dark",
 	"darkPlusColorThemeLabel": "Dark+",
 	"darkModernThemeLabel": "Dark Modern",
 	"lightPlusColorThemeLabel": "Light+",
@@ -9,5 +10,5 @@
 	"lightColorThemeLabel": "Light (Visual Studio)",
 	"hcColorThemeLabel": "Dark High Contrast",
 	"lightHcColorThemeLabel": "Light High Contrast",
-	"minimalIconThemeLabel": "Minimal (Visual Studio Code)"
+	"minimalIconThemeLabel": "Minimal (Logos)"
 }

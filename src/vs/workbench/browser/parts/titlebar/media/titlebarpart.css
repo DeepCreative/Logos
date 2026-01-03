@@ -168,13 +168,11 @@
 	border: 1px solid var(--vscode-commandCenter-border);
 	overflow: hidden;
 	margin: 0 6px;
-	border-top-left-radius: 6px;
-	border-bottom-left-radius: 6px;
-	border-top-right-radius: 6px;
-	border-bottom-right-radius: 6px;
-	height: 22px;
+	border-radius: 8px;
+	height: 24px;
 	width: 38vw;
 	max-width: 600px;
+	transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-center > .window-title > .command-center .action-item.command-center-center .action-item.command-center-quick-pick {

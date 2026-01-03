@@ -6,13 +6,19 @@
     "Themes"
   ],
   "version": "1.0.0",
-  "publisher": "vscode",
+  "publisher": "logos",
   "license": "MIT",
   "engines": {
     "vscode": "*"
   },
   "contributes": {
     "themes": [
+      {
+        "id": "Logos Dark",
+        "label": "%logosDarkThemeLabel%",
+        "uiTheme": "vs-dark",
+        "path": "./themes/logos_dark.json"
+      },
       {
         "id": "Default Dark+",
         "label": "%darkPlusColorThemeLabel%",
